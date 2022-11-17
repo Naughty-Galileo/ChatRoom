@@ -23,5 +23,5 @@ g++ client.cpp -o client
 ```
 
 ## todo
-- [] sql用户信息存储
+- [ ] sql用户信息存储
 
