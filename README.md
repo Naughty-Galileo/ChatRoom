@@ -6,6 +6,7 @@
 - 编译
 ```bash
 g++ server.cpp -o server
+g++ server.cpp ./CGImysql/sql_connection_pool.cpp -o server -lmysqlclient -lpthread
 ```
 - 运行
 ```bash

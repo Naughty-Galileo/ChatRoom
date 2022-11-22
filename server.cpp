@@ -11,16 +11,27 @@
 #include <stdlib.h>
 #include <poll.h>
 #include <fcntl.h>
+#include <unordered_map>
+
+#include "./CGImysql/sql_connection_pool.h"
 
 #define USER_LIMIT 5 /*最大用户数量*/
 #define BUFFER_SIZE 64 /*读缓冲区大小*/
 #define FD_LIMIT 65535 /*文件描述符数量限制*/
+
+enum CLIENT_STATE  // 主状态机状态
+{
+    UN_LOGOIN = 0,
+    LOGGED
+};
 
 struct client_data
 {
     sockaddr_in address;
     char* write_buf;
     char buf[BUFFER_SIZE];
+    char name[BUFFER_SIZE];
+    CLIENT_STATE state;
 };
 
 int setnoblocking(int fd)
@@ -29,6 +40,37 @@ int setnoblocking(int fd)
     int new_option = old_option | O_NONBLOCK;
     fcntl(fd, F_SETFL, new_option);
     return old_option;
+}
+
+
+// 连接数据库 加载所有用户名和密码 存入maps
+void initmysql_result(connection_pool *connPool, unordered_map<string, string>& users) {
+    //先从连接池中取一个连接
+    MYSQL *mysql = NULL;
+    connectionRAII mysqlcon(&mysql, connPool);
+
+    //在user表中检索username，passwd数据，浏览器端输入
+    if (mysql_query(mysql, "SELECT username,passwd FROM user"))
+    {
+        printf("SELECT error:%s\n", mysql_error(mysql));
+    }
+
+    //从表中检索完整的结果集
+    MYSQL_RES *result = mysql_store_result(mysql);
+
+    //返回结果集中的列数
+    int num_fields = mysql_num_fields(result);
+
+    //返回所有字段结构的数组
+    MYSQL_FIELD *fields = mysql_fetch_fields(result);
+
+    //从结果集中获取下一行，将对应的用户名和密码，存入map中
+    while (MYSQL_ROW row = mysql_fetch_row(result))
+    {
+        string temp1(row[0]);
+        string temp2(row[1]);
+        users[temp1] = temp2;
+    }
 }
 
 int main(int argc, char* argv[])
@@ -42,6 +84,15 @@ int main(int argc, char* argv[])
     int port = atoi(argv[1]);
     
     int ret;
+
+    // sql数据库连接池
+    string m_user = "root";        //登陆数据库用户名
+    string m_passWord = "1";     //登陆数据库密码
+    string m_databaseName = "mydb"; //使用数据库名
+    connection_pool *m_connPool = connection_pool::GetInstance();
+    m_connPool->init("localhost", m_user, m_passWord, m_databaseName, 3306, 1, 0);
+    unordered_map<string, string> users;
+    initmysql_result(m_connPool, users);
 
     // 绑定地址
     struct sockaddr_in address;
@@ -104,14 +155,20 @@ int main(int argc, char* argv[])
                     close(connfd);
                     continue;
                 }
+                
+                const char* info = "Welcome! input your name:\n";
+                send(connfd, info, strlen(info), 0);
 
                 user_count ++;
                 user[connfd].address = client_address;
+                user[connfd].state = UN_LOGOIN;
                 setnoblocking(connfd);
                 
                 fds[user_count].fd = connfd;
                 fds[user_count].events = POLLIN | POLLRDHUP | POLLERR;
                 fds[user_count].revents = 0;
+                // fds[user_count].events |= ~POLLOUT;
+                // fds[user_count].events |= POLLIN;
                 printf("comes a new user %d, now have %d users\n", connfd, user_count);
             }
             // 错误
@@ -151,13 +208,21 @@ int main(int argc, char* argv[])
                 }
                 else if (ret == 0) { printf("continue...\n"); }
                 else {
-                    // 通知其他用户socket
-                    for (int j = 1; j <= user_count; ++j) {
-                        if (fds[j].fd == connfd) { continue; }
+                    if (user[connfd].state == UN_LOGOIN) {
+                        strcpy(user[connfd].name, user[connfd].buf);
+                        // user[connfd].name = user[connfd].buf;
+                        user[connfd].state = LOGGED;
+                    }
+                    else {
+                        // 通知其他用户socket
+                        for (int j = 1; j <= user_count; ++j) {
+                            if (fds[j].fd == connfd) { continue; }
 
-                        fds[j].events |= ~POLLIN;
-                        fds[j].events |= POLLOUT;
-                        user[fds[j].fd].write_buf = user[connfd].buf;
+                            fds[j].events |= ~POLLIN;
+                            fds[j].events |= POLLOUT;
+                            
+                            user[fds[j].fd].write_buf = const_cast<char *>((std::string(user[connfd].name).substr(0, std::string(user[connfd].name).size()-1) + std::string(" : ") + std::string(user[connfd].buf)).c_str());
+                        }
                     }
                 }
             }
