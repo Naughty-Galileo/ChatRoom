@@ -23,6 +23,6 @@ g++ client.cpp -o client
 ./client 127.0.0.1 9190
 ```
 
-## todo
-- [ ] sql用户信息存储
+## 新增功能
+- [x] sql用户信息存储
 

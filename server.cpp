@@ -16,7 +16,7 @@
 #include "./CGImysql/sql_connection_pool.h"
 
 #define USER_LIMIT 5 /*最大用户数量*/
-#define BUFFER_SIZE 64 /*读缓冲区大小*/
+#define BUFFER_SIZE 256 /*读缓冲区大小*/
 #define FD_LIMIT 65535 /*文件描述符数量限制*/
 
 enum CLIENT_STATE  // 主状态机状态
@@ -30,7 +30,7 @@ struct client_data
     sockaddr_in address;
     char* write_buf;
     char buf[BUFFER_SIZE];
-    char name[BUFFER_SIZE];
+    string name;
     CLIENT_STATE state;
 };
 
@@ -156,7 +156,7 @@ int main(int argc, char* argv[])
                     continue;
                 }
                 
-                const char* info = "Welcome! input your name:\n";
+                const char* info = "Welcome! input your name and password(<name>&<password>):\n";
                 send(connfd, info, strlen(info), 0);
 
                 user_count ++;
@@ -167,8 +167,6 @@ int main(int argc, char* argv[])
                 fds[user_count].fd = connfd;
                 fds[user_count].events = POLLIN | POLLRDHUP | POLLERR;
                 fds[user_count].revents = 0;
-                // fds[user_count].events |= ~POLLOUT;
-                // fds[user_count].events |= POLLIN;
                 printf("comes a new user %d, now have %d users\n", connfd, user_count);
             }
             // 错误
@@ -209,19 +207,31 @@ int main(int argc, char* argv[])
                 else if (ret == 0) { printf("continue...\n"); }
                 else {
                     if (user[connfd].state == UN_LOGOIN) {
-                        strcpy(user[connfd].name, user[connfd].buf);
-                        // user[connfd].name = user[connfd].buf;
-                        user[connfd].state = LOGGED;
+                        
+                        string name_password = user[connfd].buf;
+                        int pos = name_password.find("&", 0);
+                        string name = name_password.substr(0, pos);
+                        string password = name_password.substr(pos+1, name_password.size()-pos-2);
+                        // printf("%s : %s", name.c_str(), password.c_str());
+
+                        if (users.find(name) != users.end() && users[name] == password) {
+                            user[connfd].name = name;
+                            user[connfd].state = LOGGED;
+                        }
+                        else {
+                            const char* info = "Error! Input your name and password(<name> <password>):\n";
+                            send(connfd, info, strlen(info), 0);
+                        }
                     }
                     else {
                         // 通知其他用户socket
                         for (int j = 1; j <= user_count; ++j) {
-                            if (fds[j].fd == connfd) { continue; }
+                            if (fds[j].fd == connfd || user[fds[j].fd].state == UN_LOGOIN) { continue; }
 
                             fds[j].events |= ~POLLIN;
                             fds[j].events |= POLLOUT;
                             
-                            user[fds[j].fd].write_buf = const_cast<char *>((std::string(user[connfd].name).substr(0, std::string(user[connfd].name).size()-1) + std::string(" : ") + std::string(user[connfd].buf)).c_str());
+                            user[fds[j].fd].write_buf = const_cast<char *>((user[connfd].name + std::string(" : ") + std::string(user[connfd].buf)).c_str());
                         }
                     }
                 }
